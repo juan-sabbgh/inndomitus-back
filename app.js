@@ -187,6 +187,36 @@ function getSystemPrompt(tipoAgente, tipoEscenario) {
 
 
 // ===========================
+// ==== MENSAJES INICIALES ===
+// ===========================
+
+const MENSAJES_INICIALES = {
+  cobranza: {
+    pago_vencido: `Hola, buen día. Te contactamos de parte de nuestro equipo de cobranza porque detectamos una factura vencida en tu cuenta. No te preocupes, estamos aquí para ayudarte a resolverlo rápido. ¿Tienes un momento?`,
+    plan_pagos: `Hola. Sabemos que a veces las deudas se acumulan y queremos ayudarte a salir adelante. Tenemos opciones de pago en cuotas que pueden adaptarse a tu situación. ¿Quieres que te explique cómo funciona?`,
+    recordatorio_preventivo: `⏰ Hola, solo un aviso rápido: tu próximo pago vence mañana. Para que no se generen cargos por mora, te ayudamos a completarlo hoy mismo. ¿Por cuál método prefieres pagar?`,
+  },
+  marketing: {
+    promo_exclusiva: `¡Hola! 🎉 Tenemos algo especial para ti. Por ser uno de nuestros clientes más valorados, tienes acceso a un 30% de descuento exclusivo de temporada. Es solo por tiempo limitado. ¿Te cuento cómo aplicarlo?`,
+    carrito_abandonado: `Hola 👀 Notamos que dejaste unos productos seleccionados hace un par de días y no queremos que te quedes sin ellos. Para que los hagas tuyos hoy, te regalamos el envío completamente gratis 🚚. ¿Completamos tu pedido?`,
+    upgrade_plan: `Hola. Revisando tu cuenta vemos que le estás sacando mucho provecho a tu plan actual, ¡qué bueno! Eso nos dice que quizás ya lo estás superando. Tenemos un plan superior con beneficios que se ajustan mejor a tu ritmo, y por ser cliente actual tienes precio preferencial. ¿Te interesa saber más?`,
+  },
+  atencion_cliente: {
+    estado_pedido: `Hola, ¿cómo estás? 📦 Estoy aquí para ayudarte a rastrear tu pedido en tiempo real. Solo dime tu número de orden y te doy la información al instante.`,
+    problema_servicio: `Hola. Lamentamos que estés teniendo problemas con tu servicio, entendemos lo frustrante que puede ser. Cuéntame con detalle qué está pasando y lo solucionamos juntos paso a paso. 🔧`,
+    devolucion_producto: `Hola, qué pena que hayas recibido un producto en mal estado. 😟 Me encargo personalmente de gestionar tu devolución para que no tengas que hablar con nadie más. ¿Me compartes tu número de pedido y una foto del artículo?`,
+  },
+  default: `Hola 👋 ¿En qué te puedo ayudar hoy?`,
+};
+
+function getMensajeInicial(tipoAgente, tipoEscenario) {
+  return MENSAJES_INICIALES[tipoAgente]?.[tipoEscenario]
+    || MENSAJES_INICIALES[tipoAgente]?.default
+    || MENSAJES_INICIALES.default;
+}
+
+
+// ===========================
 // ======= UTILIDADES ========
 // ===========================
 
@@ -336,20 +366,23 @@ app.post('/api/formulario-contacto', formularioLimiter, async (req, res) => {
 
 // Endpoint 2: Recibir y guardar configuración del agente activo + enviar mensaje inicial
 app.post('/api/configuracion-agente', formularioLimiter, async (req, res) => {
-  const { tipoAgente, tipoEscenario, canalContacto, numeroTelefono, mensajeInicial } = req.body;
+  const { tipoAgente, tipoEscenario, canalContacto, numeroTelefono } = req.body;
 
-  if (!numeroTelefono || !mensajeInicial) {
-    return res.status(400).json({ mensaje: 'Los campos numeroTelefono y mensajeInicial son obligatorios' });
+  if (!numeroTelefono) {
+    return res.status(400).json({ mensaje: 'El campo numeroTelefono es obligatorio' });
   }
 
   try {
     await redis.set('agent:config', { tipoAgente, tipoEscenario, canalContacto, numeroTelefono });
     console.log('Configuración guardada:', { tipoAgente, tipoEscenario, canalContacto, numeroTelefono });
 
+    const mensajeInicial = getMensajeInicial(tipoAgente, tipoEscenario);
+
     // Guardar mensaje inicial en el historial (como si lo hubiera enviado el agente)
     const chatId = `${normalizarNumeroMX(numeroTelefono)}@c.us`;
     const historialKey = `historial:${chatId}`;
     await redis.set(historialKey, [
+      { role: 'user', parts: [{ text: 'Inicia la conversación' }] },
       { role: 'model', parts: [{ text: mensajeInicial }] }
     ], { ex: 86400 });
 
