@@ -348,7 +348,9 @@ app.post('/api/configuracion-agente', formularioLimiter, async (req, res) => {
 
     // Generar mensaje inicial con Gemini
     const systemPrompt = getSystemPrompt(tipoAgente, tipoEscenario);
-    const chat = geminiModel.startChat({ systemInstruction: systemPrompt });
+    const chat = geminiModel.startChat({
+      systemInstruction: { parts: [{ text: systemPrompt }] }
+    });
     const resultado = await chat.sendMessage('Inicia la conversación con un mensaje de apertura breve y natural, acorde a tu rol. No menciones que eres una IA.');
     const mensajeInicial = resultado.response.text();
 
@@ -428,7 +430,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
     // Construir prompt con Gemini
     const systemPrompt = getSystemPrompt(agentConfig.tipoAgente, agentConfig.tipoEscenario);
     const chat = geminiModel.startChat({
-      systemInstruction: systemPrompt,
+      systemInstruction: { parts: [{ text: systemPrompt }] },
       history: historial,
     });
 
