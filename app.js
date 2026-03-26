@@ -336,25 +336,17 @@ app.post('/api/formulario-contacto', formularioLimiter, async (req, res) => {
 
 // Endpoint 2: Recibir y guardar configuración del agente activo + enviar mensaje inicial
 app.post('/api/configuracion-agente', formularioLimiter, async (req, res) => {
-  const { tipoAgente, tipoEscenario, canalContacto, numeroTelefono } = req.body;
+  const { tipoAgente, tipoEscenario, canalContacto, numeroTelefono, mensajeInicial } = req.body;
 
-  if (!numeroTelefono) {
-    return res.status(400).json({ mensaje: 'El campo numeroTelefono es obligatorio' });
+  if (!numeroTelefono || !mensajeInicial) {
+    return res.status(400).json({ mensaje: 'Los campos numeroTelefono y mensajeInicial son obligatorios' });
   }
 
   try {
     await redis.set('agent:config', { tipoAgente, tipoEscenario, canalContacto, numeroTelefono });
     console.log('Configuración guardada:', { tipoAgente, tipoEscenario, canalContacto, numeroTelefono });
 
-    // Generar mensaje inicial con Gemini
-    const systemPrompt = getSystemPrompt(tipoAgente, tipoEscenario);
-    const chat = geminiModel.startChat({
-      systemInstruction: { parts: [{ text: systemPrompt }] }
-    });
-    const resultado = await chat.sendMessage('Inicia la conversación con un mensaje de apertura breve y natural, acorde a tu rol. No menciones que eres una IA.');
-    const mensajeInicial = resultado.response.text();
-
-    // Guardar mensaje inicial en el historial del contacto
+    // Guardar mensaje inicial en el historial (como si lo hubiera enviado el agente)
     const chatId = `${normalizarNumeroMX(numeroTelefono)}@c.us`;
     const historialKey = `historial:${chatId}`;
     await redis.set(historialKey, [
@@ -363,12 +355,11 @@ app.post('/api/configuracion-agente', formularioLimiter, async (req, res) => {
 
     // Enviar por WhatsApp
     await enviarWhatsApp(chatId, mensajeInicial);
-    console.log('Mensaje inicial enviado:', { chatId, tipoAgente, tipoEscenario, mensajeInicial });
+    console.log('Mensaje inicial enviado:', { chatId, tipoAgente, tipoEscenario });
 
     res.status(200).json({
       mensaje: 'Agente configurado y mensaje inicial enviado',
       datos: { tipoAgente, tipoEscenario, canalContacto, numeroTelefono },
-      mensajeInicial
     });
   } catch (error) {
     console.error('Error al configurar agente:', error);
@@ -407,51 +398,54 @@ app.post('/api/whatsapp/enviar-mensaje', formularioLimiter, async (req, res) => 
 app.post('/api/whatsapp/webhook', async (req, res) => {
   const { typeWebhook, senderData, messageData } = req.body;
 
-  // Responder 200 inmediatamente para que Green API no reintente
-  res.status(200).json({ ok: true });
-
   // Solo procesar mensajes de texto entrantes
-  if (typeWebhook !== 'incomingMessageReceived') return;
-  if (messageData?.typeMessage !== 'textMessage') return;
+  if (typeWebhook !== 'incomingMessageReceived' || messageData?.typeMessage !== 'textMessage') {
+    return res.status(200).json({ ok: true });
+  }
 
-  const chatId = senderData.sender; // ej. "521XXXXXXXXXX@c.us"
+  const chatId = senderData.sender;
   const mensajeUsuario = messageData.textMessageData.textMessage;
 
   console.log('Mensaje entrante:', { chatId, mensaje: mensajeUsuario });
 
   try {
-    // Obtener configuración del agente activo
-    const agentConfig = await redis.get('agent:config') || { tipoAgente: 'default', tipoEscenario: 'default' };
+    // Obtener configuración del agente activo e historial en paralelo
+    const [agentConfig, historial] = await Promise.all([
+      redis.get('agent:config'),
+      redis.get(`historial:${chatId}`),
+    ]);
 
-    // Obtener historial de conversación (últimos 20 mensajes, TTL 24h)
-    const historialKey = `historial:${chatId}`;
-    const historial = await redis.get(historialKey) || [];
+    const config = agentConfig || { tipoAgente: 'default', tipoEscenario: 'default' };
+    const historialActual = historial || [];
 
-    // Construir prompt con Gemini
-    const systemPrompt = getSystemPrompt(agentConfig.tipoAgente, agentConfig.tipoEscenario);
+    // Generar respuesta con Gemini
+    const systemPrompt = getSystemPrompt(config.tipoAgente, config.tipoEscenario);
     const chat = geminiModel.startChat({
       systemInstruction: { parts: [{ text: systemPrompt }] },
-      history: historial,
+      history: historialActual,
     });
 
     const resultado = await chat.sendMessage(mensajeUsuario);
     const respuesta = resultado.response.text();
 
-    // Guardar historial actualizado en Redis (máx 20 turnos, expira en 24h)
+    // Guardar historial actualizado y enviar respuesta en paralelo
     const historialActualizado = [
-      ...historial,
+      ...historialActual,
       { role: 'user', parts: [{ text: mensajeUsuario }] },
       { role: 'model', parts: [{ text: respuesta }] },
     ].slice(-20);
 
-    await redis.set(historialKey, historialActualizado, { ex: 86400 });
+    await Promise.all([
+      redis.set(`historial:${chatId}`, historialActualizado, { ex: 86400 }),
+      enviarWhatsApp(chatId, respuesta),
+    ]);
 
-    // Enviar respuesta por WhatsApp
-    await enviarWhatsApp(chatId, respuesta);
-    console.log('Respuesta enviada:', { chatId, agente: agentConfig.tipoAgente, escenario: agentConfig.tipoEscenario });
+    console.log('Respuesta enviada:', { chatId, agente: config.tipoAgente, escenario: config.tipoEscenario });
 
+    res.status(200).json({ ok: true });
   } catch (error) {
     console.error('Error en webhook:', error);
+    res.status(200).json({ ok: true }); // siempre 200 para que Green API no reintente
   }
 });
 
