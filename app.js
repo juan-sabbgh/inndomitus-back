@@ -32,7 +32,7 @@ const redis = new Redis({
 
 // Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const geminiModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+const geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
 // Configuración personalizada de CORS
 const whitelist = process.env.CORS_ORIGIN.split(',');
