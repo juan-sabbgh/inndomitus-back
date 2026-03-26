@@ -334,21 +334,43 @@ app.post('/api/formulario-contacto', formularioLimiter, async (req, res) => {
   }
 });
 
-// Endpoint 2: Recibir y guardar configuración del agente activo
+// Endpoint 2: Recibir y guardar configuración del agente activo + enviar mensaje inicial
 app.post('/api/configuracion-agente', formularioLimiter, async (req, res) => {
   const { tipoAgente, tipoEscenario, canalContacto, numeroTelefono } = req.body;
+
+  if (!numeroTelefono) {
+    return res.status(400).json({ mensaje: 'El campo numeroTelefono es obligatorio' });
+  }
 
   try {
     await redis.set('agent:config', { tipoAgente, tipoEscenario, canalContacto, numeroTelefono });
     console.log('Configuración guardada:', { tipoAgente, tipoEscenario, canalContacto, numeroTelefono });
 
+    // Generar mensaje inicial con Gemini
+    const systemPrompt = getSystemPrompt(tipoAgente, tipoEscenario);
+    const chat = geminiModel.startChat({ systemInstruction: systemPrompt });
+    const resultado = await chat.sendMessage('Inicia la conversación con un mensaje de apertura breve y natural, acorde a tu rol. No menciones que eres una IA.');
+    const mensajeInicial = resultado.response.text();
+
+    // Guardar mensaje inicial en el historial del contacto
+    const chatId = `${normalizarNumeroMX(numeroTelefono)}@c.us`;
+    const historialKey = `historial:${chatId}`;
+    await redis.set(historialKey, [
+      { role: 'model', parts: [{ text: mensajeInicial }] }
+    ], { ex: 86400 });
+
+    // Enviar por WhatsApp
+    await enviarWhatsApp(chatId, mensajeInicial);
+    console.log('Mensaje inicial enviado:', { chatId, tipoAgente, tipoEscenario, mensajeInicial });
+
     res.status(200).json({
-      mensaje: 'Configuración de agente guardada correctamente',
-      datos: { tipoAgente, tipoEscenario, canalContacto, numeroTelefono }
+      mensaje: 'Agente configurado y mensaje inicial enviado',
+      datos: { tipoAgente, tipoEscenario, canalContacto, numeroTelefono },
+      mensajeInicial
     });
   } catch (error) {
-    console.error('Error al guardar configuración:', error);
-    res.status(500).json({ mensaje: 'Error al guardar la configuración', error: error.message });
+    console.error('Error al configurar agente:', error);
+    res.status(500).json({ mensaje: 'Error al configurar el agente', error: error.message });
   }
 });
 
