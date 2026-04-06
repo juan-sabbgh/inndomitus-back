@@ -609,6 +609,13 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
   const mensajeUsuario = messageData.textMessageData.textMessage;
   const idMensaje = req.body.idMessage;
 
+  // Números bloqueados (atendidos manualmente)
+  const estaBloqueado = await redis.get(`bloqueado:${chatId}`);
+  if (estaBloqueado) {
+    console.log('Número bloqueado, sin respuesta automática:', chatId);
+    return res.status(200).json({ ok: true });
+  }
+
   // Deduplicación: ignorar si este mensaje ya fue procesado
   const yaProcessado = await redis.get(`procesado:${idMensaje}`);
   if (yaProcessado) {
@@ -628,6 +635,25 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
     const config = agentConfig || { tipoAgente: 'inndomitus', tipoEscenario: 'general' };
     const historialActual = historial || [];
+
+    // Saludo fijo de Inndomitus cuando el usuario saluda por primera vez
+    const esInndomitus = config.tipoAgente === 'inndomitus';
+    const esSaludo = /^(hola|hi|buenos|buenas|buen dia|buen día|saludos|hey|ey|info|información|informacion|quiero información|quiero informacion|más información|mas informacion)\b/i.test(mensajeUsuario.trim());
+
+    if (esInndomitus && historialActual.length === 0 && esSaludo) {
+      const saludoFijo = `¡Hola! Un gusto saludarte desde Inndomitus. 🐺\n\nTe ayudamos a ahorrar tiempo y costos con soluciones de IA (Chatbots, automatización y desarrollo web).\n\nPara darte una asesoría más precisa: ¿De qué trata tu negocio o qué proceso te gustaría optimizar primero?`;
+
+      await Promise.all([
+        redis.set(`historial:${chatId}`, [
+          { role: 'user', parts: [{ text: mensajeUsuario }] },
+          { role: 'model', parts: [{ text: saludoFijo }] },
+        ], { ex: 86400 }),
+        enviarWhatsApp(chatId, saludoFijo),
+      ]);
+
+      console.log('Saludo Inndomitus enviado:', { chatId });
+      return res.status(200).json({ ok: true });
+    }
 
     // Generar respuesta con Gemini
     const systemPromptBase = getSystemPrompt(config.tipoAgente, config.tipoEscenario);
